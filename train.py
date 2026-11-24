@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import torch
 from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, prepare_model_for_kbit_training
-from risorius_rl import RecordingSession
+from risorius_rl import RecordingSession, Run
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, set_seed
 
@@ -140,7 +140,9 @@ def main():
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--train-data", type=Path, default=Path("examples/train.jsonl"))
     parser.add_argument("--eval-data", type=Path, default=Path("examples/eval.jsonl"))
-    parser.add_argument("--riso-config", type=Path, help="Load Risorius recording settings from YAML")
+    recording_mode = parser.add_mutually_exclusive_group()
+    recording_mode.add_argument("--riso-config", type=Path, help="Load Risorius recording settings from YAML")
+    recording_mode.add_argument("--workspace-run", action="store_true", help="Use the run supplied by riso workspace-batch")
     parser.add_argument("--trace-eval", action="store_true", help=(
         "Record the first evaluation prompt, generated answers, and a follow-up as one conversation"
     ))
@@ -150,7 +152,13 @@ def main():
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         parser.error("training requires a BF16-capable CUDA GPU")
 
-    set_seed(42)
+    if args.workspace_run and args.trace_eval:
+        parser.error("--trace-eval uses RecordingSession.request(), which workspace Run does not expose")
+    workspace_run = Run() if args.workspace_run else None
+    seed = workspace_run.parameters["seed"] if workspace_run is not None else 42
+    set_seed(seed)
+    if workspace_run is not None:
+        print(f"Platform run: {workspace_run.run_id}, seed: {seed}", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=REVISION)
     training = read_examples(args.train_data, tokenizer, args.max_length)
     evaluation = read_examples(args.eval_data, tokenizer, args.max_length)
@@ -168,15 +176,18 @@ def main():
     model = get_peft_model(base, config, revision=REVISION)
     model.print_trainable_parameters()
 
-    run = Path("outputs") / uuid4().hex
-    if args.riso_config is None:
+    run = Path("outputs") / (workspace_run.run_id if workspace_run is not None else uuid4().hex)
+    if workspace_run is not None:
+        session = workspace_run
+    elif args.riso_config is None:
         session = RecordingSession(project="playground-4090", directory=str(run / "records"), upload=False)
     else:
         session = RecordingSession.from_config(args.riso_config)
         if session.directory is None:
             parser.error(f"Could not initialize Risorius recording from {args.riso_config}")
     with session as recording:
-        print(f"Recording directory: {recording.directory}", flush=True)
+        if isinstance(recording, RecordingSession):
+            print(f"Recording directory: {recording.directory}", flush=True)
         fit(model, training, evaluation, args.steps, recording)
         save_adapter(model, tokenizer, run / "adapter")
         print(f"Adapter: {run / 'adapter'}", flush=True)
@@ -184,7 +195,7 @@ def main():
             with args.eval_data.open(encoding="utf-8") as source:
                 prompt = json.loads(next(source))["prompt"]
             trace_evaluation(model, tokenizer, prompt, recording, f"{MODEL}@{REVISION}+{run.name}")
-    if session.upload:
+    if isinstance(session, RecordingSession) and session.upload:
         report_delivery(session)
 
 

@@ -1,0 +1,5 @@
+project: gpu-lab
+kind: rollout
+entrypoint: [".venv/bin/python", "train.py", "--workspace-run", "--steps", "1"]
+parameters:
+  seed: 2

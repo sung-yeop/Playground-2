@@ -519,7 +519,7 @@ dependencies = [
 requires-dist = [
     { name = "bitsandbytes", marker = "sys_platform == 'linux'", specifier = "==0.48.2" },
     { name = "peft", specifier = "==0.18.0" },
-    { name = "risorius-rl", extras = ["recording"], specifier = "==0.15.4" },
+    { name = "risorius-rl", extras = ["recording"], specifier = "==0.15.5" },
     { name = "torch", specifier = "==2.8.0" },
     { name = "transformers", specifier = "==4.57.3" },
 ]
@@ -611,7 +611,7 @@ wheels = [
 
 [[package]]
 name = "risorius-rl"
-version = "0.15.4"
+version = "0.15.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -619,7 +619,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/20/a4e8bbd1ba2a55e6a3f2f28664913ef11d5a5b667e452936c8458ad749d2/risorius_rl-0.15.4-py3-none-any.whl", hash = "sha256:0b570ae827bd45d7f01f8e32d221343cc5a7df57a7743fdc3ab815bd846f8f5c", size = 73289, upload-time = "2026-11-24T02:45:49.473Z" },
+    { url = "https://files.pythonhosted.org/packages/01/c9/8349a8d9296a8ba85f691ca71cd1c90725234787f985c8f8098f09bde9f0/risorius_rl-0.15.5-py3-none-any.whl", hash = "sha256:3057ba3e27b4f180918661f269a42e625acb2b4f14ed9e5abbf571c7dc4e9914", size = 76257, upload-time = "2026-11-24T07:12:20.725Z" },
 ]
 
 [package.optional-dependencies]
