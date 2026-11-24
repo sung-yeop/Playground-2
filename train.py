@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -82,6 +83,46 @@ def fit(model, training, evaluation, steps, recording):
     log({"loss": evaluate(model, evaluation)}, steps, "eval")
 
 
+@torch.inference_mode()
+def trace_evaluation(model, tokenizer, prompt, recording, model_version):
+    model.eval()
+    session_id = uuid4().hex
+    messages = []
+    for question in (prompt, "방금 답을 한 문장으로 설명해 줘."):
+        messages.append({"role": "user", "content": question})
+        inputs = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        ).to(model.device)
+        with recording.request(
+            "evaluation.chat", model_version=model_version,
+            attributes={"session_id": session_id}, inputs={"message": question},
+        ) as request:
+            with recording.span("model.generate", kind="llm", inputs={"messages": messages}) as call:
+                generated = model.generate(**inputs, max_new_tokens=32, do_sample=False)
+                input_count = inputs.input_ids.shape[1]
+                output = generated[0, input_count:]
+                answer = tokenizer.decode(output, skip_special_tokens=True)
+                call.set_output({"text": answer}, usage={
+                    "input_tokens": input_count, "output_tokens": len(output),
+                    "total_tokens": input_count + len(output),
+                })
+            request.set_output({"answer": answer})
+        messages.append({"role": "assistant", "content": answer})
+    print(f"Evaluation session: {session_id}", flush=True)
+
+
+def report_delivery(session):
+    deadline = time.monotonic() + 30
+    status = session.status
+    while status["transport"]["state"] in {"pending", "connecting", "uploading"} and time.monotonic() < deadline:
+        time.sleep(0.25)
+        status = session.status
+    print(f"Delivery: {json.dumps(status['transport'])}", flush=True)
+    if status["transport"].get("error") == "ConfigError":
+        print("Check the recording token configured by auth.token_env on this host.")
+    print(f"Delivery status: {session.directory / 'delivery-status.json'}")
+
+
 def save_adapter(model, tokenizer, directory):
     # Write only the loadable adapter and tokenizer files.
     config = model.peft_config["default"]
@@ -100,6 +141,9 @@ def main():
     parser.add_argument("--train-data", type=Path, default=Path("examples/train.jsonl"))
     parser.add_argument("--eval-data", type=Path, default=Path("examples/eval.jsonl"))
     parser.add_argument("--riso-config", type=Path, help="Load Risorius recording settings from YAML")
+    parser.add_argument("--trace-eval", action="store_true", help=(
+        "Record the first evaluation prompt, generated answers, and a follow-up as one conversation"
+    ))
     args = parser.parse_args()
     if args.steps < 1 or args.max_length < 2:
         parser.error("steps must be positive and max-length must be at least 2")
@@ -134,10 +178,14 @@ def main():
     with session as recording:
         print(f"Recording directory: {recording.directory}", flush=True)
         fit(model, training, evaluation, args.steps, recording)
-    save_adapter(model, tokenizer, run / "adapter")
-    print(f"Adapter: {run / 'adapter'}")
+        save_adapter(model, tokenizer, run / "adapter")
+        print(f"Adapter: {run / 'adapter'}", flush=True)
+        if args.trace_eval:
+            with args.eval_data.open(encoding="utf-8") as source:
+                prompt = json.loads(next(source))["prompt"]
+            trace_evaluation(model, tokenizer, prompt, recording, f"{MODEL}@{REVISION}+{run.name}")
     if session.upload:
-        print(f"Delivery status: {session.directory / 'delivery-status.json'}")
+        report_delivery(session)
 
 
 if __name__ == "__main__":
