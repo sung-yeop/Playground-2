@@ -99,6 +99,7 @@ def main():
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--train-data", type=Path, default=Path("examples/train.jsonl"))
     parser.add_argument("--eval-data", type=Path, default=Path("examples/eval.jsonl"))
+    parser.add_argument("--riso-config", type=Path, help="Load Risorius recording settings from YAML")
     args = parser.parse_args()
     if args.steps < 1 or args.max_length < 2:
         parser.error("steps must be positive and max-length must be at least 2")
@@ -124,10 +125,19 @@ def main():
     model.print_trainable_parameters()
 
     run = Path("outputs") / uuid4().hex
-    with RecordingSession(project="playground-4090", directory=str(run / "records"), upload=False) as recording:
+    if args.riso_config is None:
+        session = RecordingSession(project="playground-4090", directory=str(run / "records"), upload=False)
+    else:
+        session = RecordingSession.from_config(args.riso_config)
+        if session.directory is None:
+            parser.error(f"Could not initialize Risorius recording from {args.riso_config}")
+    with session as recording:
+        print(f"Recording directory: {recording.directory}", flush=True)
         fit(model, training, evaluation, args.steps, recording)
     save_adapter(model, tokenizer, run / "adapter")
     print(f"Adapter: {run / 'adapter'}")
+    if session.upload:
+        print(f"Delivery status: {session.directory / 'delivery-status.json'}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+version: 1
+project: gpu-lab
+recording:
+  endpoint: https://rl.research.decuit.io/recording
+  directory: ../outputs/agent/records
+  upload: true
+auth:
+  token_env: RISO_API_TOKEN

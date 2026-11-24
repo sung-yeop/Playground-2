@@ -19,4 +19,4 @@ serve:
 smoke: STEPS = 1
 train smoke:
 	$(UV) --frozen python train.py --steps "$(STEPS)" --train-data "$(TRAIN_DATA)" \
-	  --eval-data "$(EVAL_DATA)"
+	  --eval-data "$(EVAL_DATA)" $(if $(RISO_CONFIG),--riso-config "$(RISO_CONFIG)")
