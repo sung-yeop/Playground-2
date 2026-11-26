@@ -1,14 +1,16 @@
 """Fine-tune Qwen with one CUDA GPU. Input JSONL has prompt and answer strings."""
 
 import argparse
+import hashlib
 import json
 import math
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import torch
-from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict, prepare_model_for_kbit_training
 from risorius_rl import RecordingSession, Run
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, set_seed
@@ -134,6 +136,34 @@ def save_adapter(model, tokenizer, directory):
     tokenizer.save_pretrained(directory)
 
 
+def publish_serving_snapshot(workspace_run, directory, tokenizer):
+    # Merge into the original BF16 weights, not the quantized training copy.
+    base = AutoModelForCausalLM.from_pretrained(
+        MODEL, revision=REVISION, dtype=torch.bfloat16, device_map={"": "cpu"},
+    )
+    adapter = PeftModel.from_pretrained(base, directory / "adapter")
+    merged = adapter.merge_and_unload(safe_merge=True)
+    snapshot = directory / "serving-model"
+    manifest = directory / "snapshot.sha256"
+    with TemporaryDirectory(dir=directory) as staging:
+        model_files = Path(staging) / "serving-model"
+        merged.save_pretrained(model_files, safe_serialization=True)
+        tokenizer.save_pretrained(model_files)
+        inventory = Path(staging) / manifest.name
+        with inventory.open("w", encoding="ascii", newline="\n") as output:
+            for path in sorted(model_files.iterdir()):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError(f"Expected a flat model snapshot, found {path.name}")
+                with path.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()
+                output.write(f"{digest}  {path.name}\n")
+        model_files.rename(snapshot)
+        inventory.replace(manifest)
+
+    workspace_run.upload(manifest, checkpoint=True)
+    print(f"Serving model: {snapshot}\nPublished checkpoint: {manifest.name}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--steps", type=int, default=8)
@@ -143,12 +173,16 @@ def main():
     recording_mode = parser.add_mutually_exclusive_group()
     recording_mode.add_argument("--riso-config", type=Path, help="Load Risorius recording settings from YAML")
     recording_mode.add_argument("--workspace-run", action="store_true", help="Use the run supplied by riso workspace-batch")
+    parser.add_argument("--publish-serving-model", action="store_true",
+                        help="Merge a BF16 serving snapshot on CPU and publish its SHA-256 inventory")
     parser.add_argument("--trace-eval", action="store_true", help=(
         "Record the first evaluation prompt, generated answers, and a follow-up as one conversation"
     ))
     args = parser.parse_args()
     if args.steps < 1 or args.max_length < 2:
         parser.error("steps must be positive and max-length must be at least 2")
+    if args.publish_serving_model and not args.workspace_run:
+        parser.error("--publish-serving-model requires --workspace-run")
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         parser.error("training requires a BF16-capable CUDA GPU")
 
@@ -191,6 +225,8 @@ def main():
         fit(model, training, evaluation, args.steps, recording)
         save_adapter(model, tokenizer, run / "adapter")
         print(f"Adapter: {run / 'adapter'}", flush=True)
+        if args.publish_serving_model:
+            publish_serving_snapshot(workspace_run, run, tokenizer)
         if args.trace_eval:
             with args.eval_data.open(encoding="utf-8") as source:
                 prompt = json.loads(next(source))["prompt"]
