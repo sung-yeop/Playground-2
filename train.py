@@ -141,7 +141,10 @@ def publish_serving_snapshot(workspace_run, directory, tokenizer):
     base = AutoModelForCausalLM.from_pretrained(
         MODEL, revision=REVISION, dtype=torch.bfloat16, device_map={"": "cpu"},
     )
-    adapter = PeftModel.from_pretrained(base, directory / "adapter")
+    # PEFT otherwise redispatches the CPU base with device_map="auto" on GPU hosts.
+    adapter = PeftModel.from_pretrained(
+        base, directory / "adapter", torch_device="cpu", device_map={"": "cpu"},
+    )
     merged = adapter.merge_and_unload(safe_merge=True)
     snapshot = directory / "serving-model"
     manifest = directory / "snapshot.sha256"
