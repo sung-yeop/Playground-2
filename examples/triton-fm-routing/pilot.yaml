@@ -1,0 +1,4 @@
+project: example-lab
+kind: world-model
+entrypoint: [python, pilot.py]
+parameters: {}
